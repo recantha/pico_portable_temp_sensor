@@ -4,6 +4,9 @@ from pimoroni_i2c import PimoroniI2C
 from breakout_bme280 import BreakoutBME280
 from picographics import PicoGraphics, DISPLAY_PICO_DISPLAY, PEN_RGB565
 from pimoroni import RGBLED, Button
+import network
+from umqtt.simple import MQTTClient
+from secrets import secrets
 
 def hsv_to_rgb(h, s, v):
     if s == 0.0:
@@ -88,6 +91,55 @@ button_y = Button(15)
 # Default mode is to show temperatures
 mode = "temperature"
 
+def display_simple(message):
+    global display
+    display.set_pen(BLACK)
+    display.clear()
+    
+    display.set_pen(WHITE)
+    display.text(message, 0, 0, 0, 2)
+    display.update()
+
+    sleep(0.2)
+
+wifi_enabled = False
+
+def enable_wifi():
+    global wifi_enabled
+    
+    wifi_enabled = True
+
+def connect_wifi():
+    # Connect to WiFi
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    wlan.connect(secrets["WIFI_SSID"], secrets["WIFI_PASSWORD"])
+    while wlan.isconnected() == False:
+        print('Waiting for connection...', wlan.status())
+        message = 'Waiting for connection...{}'.format(wlan.status())
+        display_simple(message)
+        sleep(1)
+    print("Connected to WiFi")
+    display_simple('Connected to WiFi {}'.format(secrets["WIFI_SSID"]))
+    sleep(2)
+
+def connect_mqtt():
+    global mqtt_client
+    display_simple('Connecting MQTT client')
+    mqtt_client.connect()
+
+if wifi_enabled == False:
+    display_simple('WiFi not enabled')
+    sleep(2)
+
+display_simple('Creating MQTT client')
+mqtt_client = MQTTClient(
+    client_id=secrets["MQTT_CLIENT_ID"],
+    server=secrets["ADAFRUIT_HOST"],
+    user=secrets["ADAFRUIT_IO_USERNAME"],
+    password=secrets["ADAFRUIT_IO_KEY"]
+)
+
 while True:
     # fills the screen with black
     display.set_pen(BLACK)
@@ -99,6 +151,10 @@ while True:
         mode = "humidity"
     elif button_x.is_pressed:
         mode = "pressure"
+    elif button_y.is_pressed:
+        enable_wifi()
+        connect_wifi()
+        connect_mqtt()
 
     # Get the various readings and append them to the relevant arrays
     (temperature, pressure, humidity) = bme.read()
@@ -156,7 +212,9 @@ while True:
 
     # writes the reading as text in the white rectangle
     display.set_pen(BLACK)
+    # display the label of the reading (i.e. what the reading is OF)
     display.text(label, 0, HEIGHT-25, 0, 3)
+    # display the actual reading next to the label
     display.text("{:.2f}".format(reading), 80, HEIGHT-25, 0, 3)
 
     # time to update the display
@@ -165,6 +223,18 @@ while True:
     # Might as well blink the on-board LED as well
     led.toggle()
 
+    if wifi_enabled:
+        try:
+            print("Trying to publish temperature ({})".format(temperature))
+            mqtt_client.publish(secrets["ADAFRUIT_TOPIC_TEMPERATURE"], str(temperature))
+
+            print("Trying to publish humidity ({})".format(humidity))
+            mqtt_client.publish(secrets["ADAFRUIT_TOPIC_HUMIDITY"], str(humidity))
+
+        except Exception as e:
+            print(f'Failed to publish message: {e}')
+            #display_simple(f'Failed to publish: {e}')
+
     # waits for 5 seconds
-    sleep(1)
+    sleep(5)
 
